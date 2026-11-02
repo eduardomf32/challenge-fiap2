@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evaluation-service
+  namespace: tech-challenge
+  labels:
+    app: evaluation-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: evaluation-service
+  template:
+    metadata:
+      labels:
+        app: evaluation-service
+    spec:
+      containers:
+        - name: evaluation-service
+          image: 710818030245.dkr.ecr.us-east-1.amazonaws.com/evaluation-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8004
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          env:
+            - name: FLAG_SERVICE_URL
+              value: "http://flag-service:8080"
+            - name: TARGETING_SERVICE_URL
+              value: "http://targeting-service:8080"
+            - name: AWS_REGION
+              value: "us-east-1"
+            - name: AWS_SQS_URL
+              value: "https://sqs.us-east-1.amazonaws.com/710818030245/evaluation-events-queue"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: AWS_SESSION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aws-credentials
+                  key: AWS_SESSION_TOKEN
+            - name: REDIS_URL
+              value: "redis://evaluation-cache.iaqmq2.ng.0001.use1.cache.amazonaws.com:6379"
+            - name: REDIS_URL
+              value: "redis://redis-service:6379"
+            - name: FLAG_SERVICE_URL
+              value: "http://flag-service:8080"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: evaluation-service
+  namespace: tech-challenge
+spec:
+  type: ClusterIP
+  selector:
+    app: evaluation-service
+  ports:
+    - port: 8080
+      targetPort: 8004

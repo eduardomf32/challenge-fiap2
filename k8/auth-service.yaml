@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: tech-challenge
+  labels:
+    app: auth-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+        - name: auth-service
+          image: 710818030245.dkr.ecr.us-east-1.amazonaws.com/auth-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: databases-secret
+                  key: DATABASE_URL_AUTH
+            - name: MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: databases-secret
+                  key: MASTER_KEY
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: tech-challenge
+spec:
+  type: ClusterIP
+  selector:
+    app: auth-service
+  ports:
+    - port: 8080
+      targetPort: 8001

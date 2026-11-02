@@ -1,0 +1,201 @@
+services:
+  postgres-auth:
+    image: postgres:16-alpine
+    container_name: fiap3-postgres-auth
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: auth_db
+    ports:
+      - "${AUTH_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_auth_data:/var/lib/postgresql/data
+      - ./auth-service/db/init.sql:/docker-entrypoint-initdb.d/01-auth-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d auth_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  postgres-flags-targeting:
+    image: postgres:16-alpine
+    container_name: fiap3-postgres-flags-targeting
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: flags_db
+    ports:
+      - "${FLAGS_TARGETING_POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - postgres_flags_targeting_data:/var/lib/postgresql/data
+      - ./docker/init-flags-targeting-db.sh:/docker-entrypoint-initdb.d/01-init-databases.sh:ro
+      - ./flag-service/db/init.sql:/scripts/flags-init.sql:ro
+      - ./targeting-service/db/init.sql:/scripts/targeting-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d flags_db && pg_isready -U \"$${POSTGRES_USER}\" -d targeting_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: fiap3-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:2.5.2
+    container_name: fiap3-dynamodb-local
+    user: root
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "./data", "-disableTelemetry"]
+    working_dir: /home/dynamodblocal
+    ports:
+      - "8006:8000"
+    volumes:
+      - dynamodb_data:/home/dynamodblocal/data
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    container_name: fiap3-auth-service
+    restart: unless-stopped
+    ports:
+      - "${AUTH_PORT:-8001}:8001"
+    environment:
+      PORT: "8001"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-auth:5432/auth_db?sslmode=disable"
+      MASTER_KEY: ${MASTER_KEY:-admin-secreto-123}
+    depends_on:
+      postgres-auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  flag-service:
+    build:
+      context: ./flag-service
+      dockerfile: Dockerfile
+    container_name: fiap3-flag-service
+    restart: unless-stopped
+    ports:
+      - "${FLAG_PORT:-8002}:8002"
+    environment:
+      PORT: "8002"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-flags-targeting:5432/flags_db"
+      AUTH_SERVICE_URL: http://auth-service:8001
+    depends_on:
+      postgres-flags-targeting:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  targeting-service:
+    build:
+      context: ./targeting-service
+      dockerfile: Dockerfile
+    container_name: fiap3-targeting-service
+    restart: unless-stopped
+    ports:
+      - "${TARGETING_PORT:-8003}:8003"
+    environment:
+      PORT: "8003"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-flags-targeting:5432/targeting_db"
+      AUTH_SERVICE_URL: http://auth-service:8001
+    depends_on:
+      postgres-flags-targeting:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  evaluation-service:
+    build:
+      context: ./evaluation-service
+      dockerfile: Dockerfile
+    container_name: fiap3-evaluation-service
+    restart: unless-stopped
+    ports:
+      - "${EVALUATION_PORT:-8004}:8004"
+    environment:
+      PORT: "8004"
+      REDIS_URL: redis://redis:6379
+      FLAG_SERVICE_URL: http://flag-service:8002
+      TARGETING_SERVICE_URL: http://targeting-service:8003
+      SERVICE_API_KEY: ${SERVICE_API_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_SQS_URL: ${AWS_SQS_URL:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-dummy}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-dummy}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    depends_on:
+      redis:
+        condition: service_healthy
+      flag-service:
+        condition: service_healthy
+      targeting-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8004/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  analytics-service:
+    build:
+      context: ./analytics-service
+      dockerfile: Dockerfile
+    container_name: fiap3-analytics-service
+    restart: unless-stopped
+    ports:
+      - "${ANALYTICS_PORT:-8005}:8005"
+    environment:
+      PORT: "8005"
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_SQS_URL: ${AWS_SQS_URL:-}
+      AWS_DYNAMODB_TABLE: ${AWS_DYNAMODB_TABLE:-ToggleMasterAnalytics}
+      AWS_DYNAMODB_ENDPOINT_URL: ${AWS_DYNAMODB_ENDPOINT_URL-http://dynamodb-local:8000}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-dummy}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-dummy}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    depends_on:
+      dynamodb-local:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_auth_data:
+    name: fiap3_postgres_auth_data
+  postgres_flags_targeting_data:
+    name: fiap3_postgres_flags_targeting_data
+  redis_data:
+    name: fiap3_redis_data
+  dynamodb_data:
+    name: fiap3_dynamodb_data
