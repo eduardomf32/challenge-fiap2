@@ -7,7 +7,7 @@ import time
 
 api_key = os.environ.get("API_KEY")
 if not api_key:
-    api_key = "tm_key_b08277a34f830661e27885e2611d65382b5cb31bb9347cb65ed587435e28b18e"
+    api_key = "API_KEY"
 
 url = "http://localhost:8080/evaluation/evaluate?flag_name=nova-interface-checkout&user_id=teste-hpa"
 headers = {
